@@ -34,8 +34,6 @@ void sanitize_hardware(void) {
 
 void get_user_input(const char* prompt, char* buffer, int max_len) {
     // 1. Initialize the keyboard on the bottom screen (Sub engine)
-    // Since there is NO text console on the bottom screen anymore, 
-    // the keyboard gets 100% of the VRAM. No more sliding, no more artifacts!
     Keyboard* kb = keyboardGetDefault();
     keyboardInit(kb, 3, BgType_Text4bpp, BgSize_T_256x256, 31, 0, false, true);
     
@@ -81,26 +79,30 @@ int main(void) {
     vramSetBankC(VRAM_C_SUB_BG);
 
     // ONLY initialize a console for the TOP screen. 
-    // We leave the bottom screen completely empty for the keyboard.
     PrintConsole topScreen;
     consoleInit(&topScreen, 3, BgType_Text4bpp, BgSize_T_256x256, 31, 0, true, true);
     consoleSelect(&topScreen);
 
     printf("--- DSi Chat Setup ---\n");
+    printf("Connecting to WiFi...\n");
+
+    // --- WIFI INIT MUST BE DONE EARLY ---
+    // We connect to Wi-Fi immediately so the ARM7 coprocessor doesn't time out 
+    // while waiting for the user to slowly type their username and password.
+    if (!Wifi_InitDefault(WFC_CONNECT)) {
+        printf("WiFi failed!\n");
+        while (1) swiWaitForVBlank();
+    }
+    while (Wifi_AssocStatus() != ASSOCSTATUS_ASSOCIATED) swiWaitForVBlank();
+    
+    printf("WiFi Connected!\n");
 
     // The input function will use the bottom screen for the keyboard,
     // but it will print our typing onto the top screen!
     get_user_input("Enter Username:", chat_user, 32);
     get_user_input("Enter Password:", chat_pass, 32);
 
-    printf("\nUser: %s\nConnecting...\n", chat_user);
-
-    // --- WIFI & SOCKET LOGIC ---
-    if (!Wifi_InitDefault(WFC_CONNECT)) {
-        printf("WiFi failed!\n");
-        while (1) swiWaitForVBlank();
-    }
-    while (Wifi_AssocStatus() != ASSOCSTATUS_ASSOCIATED) swiWaitForVBlank();
+    printf("\nUser: %s\nConnecting to Server...\n", chat_user);
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in server;
@@ -122,6 +124,7 @@ int main(void) {
 
     bool loggedIn = false;
     char netBuffer[1024];
+    int frameCounter = 0;
 
     while (1) {
         scanKeys();
@@ -134,14 +137,22 @@ int main(void) {
             printf("[%s]: Hello!\n", chat_user);
         }
 
-        int bytes = recv(sock, netBuffer, sizeof(netBuffer) - 1, 0);
-        if (bytes > 0) {
-            netBuffer[bytes] = '\0';
-            if (!loggedIn && strstr(netBuffer, "OK|LOGIN")) {
-                loggedIn = true;
-                printf("Auth Success!\nTap A to say Hi.\n");
-            } else if (loggedIn) {
-                printf("%s", netBuffer);
+        // NETWORK POLL
+        // Throttling recv() to run every 20 frames. 
+        // Bombarding the DSi's tiny Wi-Fi chip 60 times a second can crash it!
+        frameCounter++;
+        if (frameCounter > 20) {
+            frameCounter = 0;
+            int bytes = recv(sock, netBuffer, sizeof(netBuffer) - 1, 0);
+            
+            if (bytes > 0) {
+                netBuffer[bytes] = '\0';
+                if (!loggedIn && strstr(netBuffer, "OK|LOGIN")) {
+                    loggedIn = true;
+                    printf("Auth Success!\nTap A to say Hi.\n");
+                } else if (loggedIn) {
+                    printf("%s", netBuffer);
+                }
             }
         }
 
