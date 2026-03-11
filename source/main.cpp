@@ -17,12 +17,14 @@ char chat_pass[32] = {0};
 
 void get_user_input(const char* prompt, char* buffer, int max_len) {
     // 1. Setup the keyboard specifically for this prompt
-    // We use keyboardInit instead of keyboardDemoInit for more control
-    Keyboard* kb = keyboardDemoInit();
+    // Grab the default layout but initialize it manually on Background Layer 3.
+    // We use Map Base 20 to keep it far away from the console's Map Base 31.
+    Keyboard* kb = keyboardGetDefault();
+    keyboardInit(kb, 3, BgType_Text4bpp, BgSize_T_256x256, 20, 0, false, true);
     keyboardShow();
     
-    // Clear the bottom console area so the keyboard doesn't draw over old text
-    printf("\x1b[2J"); // ANSI clear screen code
+    // Clear the restricted window area we set up in main()
+    printf("\x1b[2J"); 
     printf("\n%s\n> ", prompt);
     
     int index = 0;
@@ -42,9 +44,9 @@ void get_user_input(const char* prompt, char* buffer, int max_len) {
         }
     }
 
-    // 2. IMPORTANT: Hide and "kill" the keyboard visual to stop artifacts
+    // 2. IMPORTANT: Hide the keyboard to free up the screen
     keyboardHide();
-    // Clear the bottom screen again to remove keyboard remnants
+    // Clear the restricted screen window again
     printf("\x1b[2J"); 
 }
 
@@ -58,10 +60,16 @@ int main(void) {
 
     PrintConsole topScreen, bottomScreen;
     
-    // Init Top Screen (Main engine)
+    // Init Top Screen (Main engine) - Maps to Background 3, Map Base 31
     consoleInit(&topScreen, 3, BgType_Text4bpp, BgSize_T_256x256, 31, 0, true, true);
-    // Init Bottom Screen (Sub engine) - This is where the keyboard lives
+    
+    // Init Bottom Screen (Sub engine) - Maps to Background 0, Map Base 31
     consoleInit(&bottomScreen, 0, BgType_Text4bpp, BgSize_T_256x256, 31, 0, false, true);
+
+    // Restrict the text area on the bottom screen to the top 10 rows!
+    // This stops the text from ever reaching the keyboard area (which sits below), 
+    // preventing the hardware scrolling from tearing the keyboard graphics.
+    consoleSetWindow(&bottomScreen, 0, 0, 32, 10);
 
     // Start with Bottom Screen for Input
     consoleSelect(&bottomScreen);
@@ -90,6 +98,7 @@ int main(void) {
         while (1) swiWaitForVBlank();
     }
 
+    // Set socket to non-blocking mode so the UI doesn't freeze while waiting for messages
     fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK);
 
     char loginCmd[256];
